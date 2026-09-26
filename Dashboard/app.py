@@ -5,6 +5,29 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import os
+import base64
+
+def set_background(image_path):
+    with open(image_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode()
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("data:image/jpeg;base64,{encoded}");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }}
+        [data-testid="stSidebar"] {{
+            background-color: rgba(10, 20, 50, 0.85);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+set_background(os.path.join(BASE_DIR, "assets", "background.jpg"))
 st.set_page_config(
     page_title="Project FORESIGHT",
     page_icon="📦",
