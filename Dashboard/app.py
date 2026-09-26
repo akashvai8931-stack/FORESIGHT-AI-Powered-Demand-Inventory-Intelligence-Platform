@@ -7,6 +7,14 @@ from datetime import datetime
 import os
 import base64
 
+st.set_page_config(
+    page_title="Project FORESIGHT",
+    page_icon="📦",
+    layout="wide"
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def set_background(image_path):
     with open(image_path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
@@ -28,13 +36,6 @@ def set_background(image_path):
     )
 
 set_background(os.path.join(BASE_DIR, "assets", "background.jpg"))
-st.set_page_config(
-    page_title="Project FORESIGHT",
-    page_icon="📦",
-    layout="wide"
-)
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @st.cache_data
 def load_data():
@@ -44,6 +45,7 @@ def load_data():
     return master, risk, forecast_results
 
 master_df, risk_df, forecast_results = load_data()
+
 st.sidebar.title("📦 Project FORESIGHT")
 page = st.sidebar.radio(
     "Navigate",
