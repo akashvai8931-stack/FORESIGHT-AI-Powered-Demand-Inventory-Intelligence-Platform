@@ -4,22 +4,23 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-
+import os
 st.set_page_config(
     page_title="Project FORESIGHT",
     page_icon="📦",
     layout="wide"
 )
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 @st.cache_data
 def load_data():
-    master = pd.read_csv("data/master_daily_clean.csv", parse_dates=["Date"])
-    risk = pd.read_csv("data/risk_scoring_output.csv", parse_dates=["Snapshot_Date"])
-    forecast_results = pd.read_csv("data/forecast_results.csv", parse_dates=["Date"])
+    master = pd.read_csv(os.path.join(BASE_DIR, "data", "master_daily_clean.csv"), parse_dates=["Date"])
+    risk = pd.read_csv(os.path.join(BASE_DIR, "data", "risk_scoring_output.csv"), parse_dates=["Snapshot_Date"])
+    forecast_results = pd.read_csv(os.path.join(BASE_DIR, "data", "forecast_results.csv"), parse_dates=["Date"])
     return master, risk, forecast_results
 
 master_df, risk_df, forecast_results = load_data()
-
 st.sidebar.title("📦 Project FORESIGHT")
 page = st.sidebar.radio(
     "Navigate",
