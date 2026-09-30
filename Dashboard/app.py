@@ -15,6 +15,14 @@ st.set_page_config(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ---------------------------------------------------------------------------
+# OPTIONAL: if the baseline WAPE calculated below does NOT match the value in
+# your notebook (31.46), type the notebook value here (e.g. 31.46).
+# Leave as None to use the value calculated from the data.
+# ---------------------------------------------------------------------------
+BASELINE_WAPE_OVERRIDE = None
+
+
 def set_background(image_path):
     with open(image_path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
@@ -36,6 +44,17 @@ def set_background(image_path):
     )
 
 set_background(os.path.join(BASE_DIR, "assets", "background.jpg"))
+import plotly.io as pio
+
+pio.templates["foresight_dark"] = pio.templates["plotly_dark"]
+pio.templates["foresight_dark"].layout.update(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(20,30,60,0.4)",
+    font=dict(color="#E8EEF7"),
+    xaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
+    yaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
+)
+pio.templates.default = "foresight_dark"
 
 @st.cache_data
 def load_data():
@@ -43,6 +62,54 @@ def load_data():
     risk = pd.read_csv(os.path.join(BASE_DIR, "data", "risk_scoring_output.csv"), parse_dates=["Snapshot_Date"])
     forecast_results = pd.read_csv(os.path.join(BASE_DIR, "data", "forecast_results.csv"), parse_dates=["Date"])
     return master, risk, forecast_results
+
+
+def wape(actual, predicted):
+    """Weighted Absolute Percentage Error, in %."""
+    return float(np.abs(actual - predicted).sum() / actual.sum() * 100)
+
+
+@st.cache_data
+def compute_performance(fr, master):
+    """Model WAPE vs seasonal-naive baseline WAPE across all SKUs.
+
+    - Model WAPE uses the Actual / Predicted columns of forecast_results.csv.
+    - Baseline: if forecast_results.csv already has a baseline column it is used;
+      otherwise a weekly seasonal-naive forecast (same weekday last week) is
+      built from the sales history.
+    """
+    model_wape = wape(fr["Actual"], fr["Predicted"])
+
+    baseline_col = next(
+        (c for c in fr.columns
+         if c.lower() in ("baseline", "baseline_pred", "baseline_predicted",
+                          "seasonal_naive", "naive_pred", "naive")),
+        None,
+    )
+
+    if baseline_col is not None:
+        baseline_wape = wape(fr["Actual"], fr[baseline_col])
+        baseline_source = f"column '{baseline_col}' in forecast_results.csv"
+    else:
+        m = master[["SKU", "Date", "Units_Sold"]].sort_values(["SKU", "Date"]).copy()
+        m["Baseline"] = m.groupby("SKU")["Units_Sold"].shift(7)
+        merged = fr.merge(m[["SKU", "Date", "Baseline"]], on=["SKU", "Date"], how="left")
+        merged = merged.dropna(subset=["Baseline"])
+        baseline_wape = wape(merged["Actual"], merged["Baseline"])
+        baseline_source = "calculated: same weekday last week"
+
+    if BASELINE_WAPE_OVERRIDE is not None:
+        baseline_wape = float(BASELINE_WAPE_OVERRIDE)
+        baseline_source = "value from modelling notebook"
+
+    improvement = (baseline_wape - model_wape) / baseline_wape * 100
+    return {
+        "model_wape": model_wape,
+        "baseline_wape": baseline_wape,
+        "improvement": improvement,
+        "baseline_source": baseline_source,
+    }
+
 
 master_df, risk_df, forecast_results = load_data()
 
@@ -88,6 +155,12 @@ elif page == "Sales Analytics":
     st.title("📈 Sales Analytics")
     st.markdown("---")
 
+    st.info(
+        "**Data scope:** 4 datasets (daily sales, product master, calendar, inventory snapshots), "
+        "50 core SKUs, Jan 2024 – Dec 2025. The inventory file listed 200 SKUs, but only 50 matched "
+        "the sales and product records; the other 150 were split out and excluded from forecasting."
+    )
+
     st.subheader("Revenue by Category")
     cat_perf = master_df.groupby('Category')['Revenue'].sum().sort_values(ascending=False).reset_index()
     fig1 = px.bar(cat_perf, x='Category', y='Revenue', color='Category')
@@ -129,7 +202,42 @@ elif page == "Demand Forecast":
     st.plotly_chart(fig, use_container_width=True)
 
     sku_mape = sku_forecast['APE'].mean()
-    st.metric("Forecast Accuracy (MAPE)", f"{sku_mape:.1f}%")
+    st.metric("Selected SKU — MAPE (lower is better)", f"{sku_mape:.1f}%")
+
+    # ------------------------- NEW: model vs baseline -------------------------
+    st.markdown("---")
+    st.subheader("Model Performance vs Baseline (all SKUs)")
+
+    perf = compute_performance(forecast_results, master_df)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Model WAPE (XGBoost)", f"{perf['model_wape']:.2f}%")
+    c2.metric("Seasonal-Naive Baseline WAPE", f"{perf['baseline_wape']:.2f}%")
+    c3.metric("Relative Improvement", f"{perf['improvement']:.0f}%")
+
+    perf_df = pd.DataFrame({
+        "Model": ["Seasonal-Naive Baseline", "XGBoost Model"],
+        "WAPE (%)": [perf["baseline_wape"], perf["model_wape"]],
+    })
+    fig_perf = px.bar(perf_df, x="Model", y="WAPE (%)", color="Model", text_auto=".2f")
+    fig_perf.update_layout(showlegend=False)
+    st.plotly_chart(fig_perf, use_container_width=True)
+
+    st.caption(
+        "WAPE (Weighted Absolute Percentage Error) = total absolute error ÷ total actual sales, so it weights "
+        "errors by volume. The per-SKU MAPE above treats every day equally, so low-volume days inflate it. "
+        "Lower is better for both. "
+        f"Baseline source: {perf['baseline_source']}."
+    )
+
+    with st.expander("Model details"):
+        st.markdown("""
+        - **Algorithm:** XGBoost (300 trees, depth 6, learning rate 0.05)
+        - **Features:** lag features (1, 7, 14 days) and rolling averages (7, 30 days); promotion and
+          weekend effects are included
+        - **Validation:** chronological train/test split (not random), so the model never sees the future
+        - **Benchmark:** seasonal-naive baseline, as required by the project brief
+        """)
 
 elif page == "Inventory Dashboard":
     st.title("📋 Inventory Dashboard")
